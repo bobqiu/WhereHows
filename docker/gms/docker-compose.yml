@@ -1,0 +1,23 @@
+---
+version: '3.5'
+services:
+  datahub-gms:
+    image: keremsahin/datahub-gms:latest
+    hostname: datahub-gms
+    container_name: datahub-gms
+    ports:
+      - "8080:8080"
+    environment:
+      - EBEAN_DATASOURCE_USERNAME=datahub
+      - EBEAN_DATASOURCE_PASSWORD=datahub
+      - EBEAN_DATASOURCE_HOST=mysql:3306
+      - EBEAN_DATASOURCE_URL=jdbc:mysql://mysql:3306/datahub
+      - EBEAN_DATASOURCE_DRIVER=com.mysql.jdbc.Driver
+      - KAFKA_BOOTSTRAP_SERVER=broker:29092
+      - KAFKA_SCHEMAREGISTRY_URL=http://schema-registry:8081
+      - ELASTICSEARCH_HOST=elasticsearch
+      - ELASTICSEARCH_PORT=9200
+
+networks:
+  default:
+    name: datahub_network
