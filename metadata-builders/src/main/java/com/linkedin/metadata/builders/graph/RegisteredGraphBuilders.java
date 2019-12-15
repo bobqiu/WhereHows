@@ -20,7 +20,8 @@ public class RegisteredGraphBuilders {
   private static final List<BaseGraphBuilder> REGISTERED_GRAPH_BUILDERS =
       Collections.unmodifiableList(new LinkedList<BaseGraphBuilder>() {
         {
-          add(new DatasetGroupGraphBuilder());
+          add(new CorpUserGraphBuilder());
+          add(new DatasetGraphBuilder());
         }
       });
 

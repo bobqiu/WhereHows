@@ -1,5 +1,6 @@
 package com.linkedin.metadata.restli;
 
+import com.linkedin.common.UrnArray;
 import com.linkedin.common.urn.Urn;
 import com.linkedin.data.template.RecordTemplate;
 import com.linkedin.data.template.UnionTemplate;
@@ -7,7 +8,6 @@ import com.linkedin.metadata.dao.BaseSearchDAO;
 import com.linkedin.metadata.dao.SearchResult;
 import com.linkedin.metadata.dao.utils.ModelUtils;
 import com.linkedin.metadata.query.AutoCompleteResult;
-import com.linkedin.metadata.query.CriterionArray;
 import com.linkedin.metadata.query.Filter;
 import com.linkedin.metadata.query.SearchResultMetadata;
 import com.linkedin.metadata.query.SortCriterion;
@@ -54,8 +54,6 @@ public abstract class BaseSearchableEntityResource<
     // @formatter:on
     extends BaseEntityResource<KEY, VALUE, URN, SNAPSHOT, ASPECT_UNION> {
 
-  private static final Filter EMPTY_FILTER = new Filter().setCriteria(new CriterionArray());
-  private static final String MATCH_ALL = "*";
   private static final String DEFAULT_SORT_CRITERION_FIELD = "urn";
 
   public BaseSearchableEntityResource(@Nonnull Class<SNAPSHOT> snapshotClass,
@@ -70,13 +68,14 @@ public abstract class BaseSearchableEntityResource<
   protected abstract BaseSearchDAO<DOCUMENT> getSearchDAO();
 
   /**
-   * Returns all {@link VALUE} objects from search index. By default the list is sorted in ascending order of urn
+   * Returns all {@link VALUE} objects from DB which are also available in the search index for the corresponding entity.
+   * By default the list is sorted in ascending order of urn
    *
    * @param pagingContext pagination context
    * @param aspectNames list of aspect names that need to be returned
    * @param filter {@link Filter} to filter the search results
    * @param sortCriterion {@link SortCriterion} to sort the search results
-   * @return list of all {@link VALUE} objects obtained from search results
+   * @return list of all {@link VALUE} objects obtained from DB
    */
   @RestMethod.GetAll
   @Nonnull
@@ -88,9 +87,10 @@ public abstract class BaseSearchableEntityResource<
     final Filter searchFilter = filter != null ? filter : EMPTY_FILTER;
     final SortCriterion searchSortCriterion = sortCriterion != null ? sortCriterion
         : new SortCriterion().setField(DEFAULT_SORT_CRITERION_FIELD).setOrder(SortOrder.ASCENDING);
+    final SearchResult<DOCUMENT> filterResult =
+        getSearchDAO().filter(searchFilter, searchSortCriterion, pagingContext.getStart(), pagingContext.getCount());
     return RestliUtils.toTask(
-        () -> getSearchQueryCollectionResult(MATCH_ALL, aspectNames, searchFilter, searchSortCriterion,
-            pagingContext).getElements());
+        () -> getSearchQueryCollectionResult(filterResult, aspectNames).getElements());
   }
 
   @Finder(FINDER_SEARCH)
@@ -102,8 +102,10 @@ public abstract class BaseSearchableEntityResource<
       @PagingContextParam @Nonnull PagingContext pagingContext) {
 
     final Filter searchFilter = filter != null ? filter : EMPTY_FILTER;
+    final SearchResult<DOCUMENT> searchResult =
+        getSearchDAO().search(input, searchFilter, sortCriterion, pagingContext.getStart(), pagingContext.getCount());
     return RestliUtils.toTask(
-        () -> getSearchQueryCollectionResult(input, aspectNames, searchFilter, sortCriterion, pagingContext));
+        () -> getSearchQueryCollectionResult(searchResult, aspectNames));
   }
 
   @Action(name = ACTION_AUTOCOMPLETE)
@@ -115,18 +117,19 @@ public abstract class BaseSearchableEntityResource<
   }
 
   @Nonnull
-  private CollectionResult<VALUE, SearchResultMetadata> getSearchQueryCollectionResult(@Nonnull String input,
-      @Nonnull String[] aspectNames, @Nullable Filter searchFilter, @Nullable SortCriterion sortCriterion,
-      @Nonnull PagingContext pagingContext) {
+  private CollectionResult<VALUE, SearchResultMetadata> getSearchQueryCollectionResult(@Nonnull SearchResult<DOCUMENT> searchResult,
+      @Nonnull String[] aspectNames) {
 
-    final SearchResult<DOCUMENT> searchResult =
-        getSearchDAO().search(input, searchFilter, sortCriterion, pagingContext.getStart(), pagingContext.getCount());
     final List<URN> matchedUrns = searchResult.getDocumentList()
         .stream()
         .map(d -> (URN) ModelUtils.getUrnFromDocument(d))
         .collect(Collectors.toList());
-    final Map<URN, VALUE> urnValueMap = getInternal(matchedUrns, parseAspectsParam(aspectNames));
-    return new CollectionResult<>(matchedUrns.stream().map(urn -> urnValueMap.get(urn)).collect(Collectors.toList()),
-        searchResult.getTotalCount(), searchResult.getSearchResultMetadata());
+    final Map<URN, VALUE> urnValueMap = getInternalNonEmpty(matchedUrns, parseAspectsParam(aspectNames));
+    final List<URN> existingUrns = matchedUrns.stream().filter(urn -> urnValueMap.containsKey(urn)).collect(Collectors.toList());
+    return new CollectionResult<>(
+        existingUrns.stream().map(urn -> urnValueMap.get(urn)).collect(Collectors.toList()),
+        searchResult.getTotalCount(),
+        searchResult.getSearchResultMetadata().setUrns(new UrnArray(existingUrns.stream().map(urn -> (Urn) urn).collect(Collectors.toList())))
+    );
   }
 }

@@ -1,17 +1,28 @@
 package com.linkedin.metadata.dao;
 
+import com.linkedin.common.urn.CorpGroupUrn;
+import com.linkedin.common.urn.DatasetUrn;
 import com.linkedin.common.urn.Urn;
+import com.linkedin.common.urn.CorpuserUrn;
 import com.linkedin.data.DataMap;
 import com.linkedin.data.template.RecordTemplate;
 import com.linkedin.metadata.dao.exception.ModelConversionException;
 import com.linkedin.metadata.dao.utils.RecordUtils;
+import com.linkedin.metadata.entity.CorpGroupEntity;
+import com.linkedin.metadata.entity.CorpUserEntity;
+import com.linkedin.metadata.entity.DatasetEntity;
 import com.linkedin.metadata.query.Condition;
+import com.linkedin.metadata.query.Criterion;
+import com.linkedin.metadata.query.CriterionArray;
 import com.linkedin.metadata.query.Filter;
+import com.linkedin.metadata.query.RelationshipDirection;
+import com.linkedin.metadata.query.RelationshipFilter;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.StringJoiner;
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import org.apache.commons.lang3.ClassUtils;
 import org.neo4j.driver.v1.types.Node;
 import org.neo4j.driver.v1.types.Relationship;
@@ -26,6 +37,22 @@ public class Neo4jUtil {
   private Neo4jUtil() {
     // Util class
   }
+
+  // TODO: relationship model change or auto generate by scanning all entity models
+  static final Map<String, String> URN_TO_ENTITY_TYPE = Collections.unmodifiableMap(new HashMap<String, String>() {
+
+    {
+      put(CorpuserUrn.ENTITY_TYPE, getType(CorpUserEntity.class));
+      put(CorpGroupUrn.ENTITY_TYPE, getType(CorpGroupEntity.class));
+      put(DatasetUrn.ENTITY_TYPE, getType(DatasetEntity.class));
+
+      // For unit testing only
+      // TODO: auto generate through models, and make 1-1 mapping for testing urn and entity type
+      put("entityFoo", "`com.linkedin.testing.EntityFoo`");
+      put("entityBar", "`com.linkedin.testing.EntityBar`");
+      put("entityBaz", "`com.linkedin.testing.EntityBaz`");
+    }
+  });
 
   /**
    * Converts ENTITY to node (field:value map)
@@ -113,14 +140,24 @@ public class Neo4jUtil {
    */
   @Nonnull
   public static String filterToCriteria(@Nonnull Filter filter) {
-    if (!filter.getCriteria().stream().allMatch(criterion -> Condition.EQUAL.equals(criterion.getCondition()))) {
-      throw new RuntimeException("Neo4j query filter only support EQUAL condition " + filter);
+    return criterionToString(filter.getCriteria());
+  }
+
+  /**
+   * Converts {@link CriterionArray} to neo4j query string
+   *
+   * @param criterionArray CriterionArray in a Filter
+   * @return Neo4j criteria string
+   */
+  @Nonnull
+  public static String criterionToString(@Nonnull CriterionArray criterionArray) {
+    if (!criterionArray.stream().allMatch(criterion -> Condition.EQUAL.equals(criterion.getCondition()))) {
+      throw new RuntimeException("Neo4j query filter only support EQUAL condition " + criterionArray);
     }
 
     final StringJoiner joiner = new StringJoiner(",", "{", "}");
 
-    filter.getCriteria()
-        .forEach(criterion -> joiner.add(toCriterionString(criterion.getField(), criterion.getValue())));
+    criterionArray.forEach(criterion -> joiner.add(toCriterionString(criterion.getField(), criterion.getValue())));
 
     return joiner.length() <= 2 ? "" : joiner.toString();
   }
@@ -219,13 +256,65 @@ public class Neo4jUtil {
 
   // Gets the Node/Edge type from an Entity/Relationship, using the backtick-quoted FQCN
   @Nonnull
-  public static String getType(@Nonnull RecordTemplate record) {
-    return getType(record.getClass());
+  public static String getType(@Nullable RecordTemplate record) {
+    return record == null ? "" : getType(record.getClass());
+  }
+
+  // Gets the Node/Edge type from an Entity/Relationship class, return empty string if null
+  @Nonnull
+  public static String getTypeOrEmptyString(@Nullable Class<? extends RecordTemplate> recordClass) {
+    return recordClass == null ? "" : ":" + getType(recordClass);
   }
 
   // Gets the Node/Edge type from an Entity/Relationship class, using the backtick-quoted FQCN
   @Nonnull
   public static String getType(@Nonnull Class<? extends RecordTemplate> recordClass) {
     return new StringBuilder("`").append(recordClass.getCanonicalName()).append("`").toString();
+  }
+
+  // Gets node type from Urn
+  @Nonnull
+  public static String getNodeType(@Nonnull Urn urn) {
+    return ":" + URN_TO_ENTITY_TYPE.getOrDefault(urn.getEntityType(), "UNKNOWN");
+  }
+
+  /**
+   * Create {@link RelationshipFilter} using filter and relationship direction
+   *
+   * @param filter {@link Filter} filter
+   * @param relationshipDirection {@link RelationshipDirection} relationship direction
+   * @return RelationshipFilter
+   */
+  @Nonnull
+  public static RelationshipFilter createRelationshipFilter(@Nonnull Filter filter,
+      @Nonnull RelationshipDirection relationshipDirection) {
+    return new RelationshipFilter().setCriteria(filter.getCriteria()).setDirection(relationshipDirection);
+  }
+
+  /**
+   * Create {@link RelationshipFilter} using filter conditions and relationship direction
+   *
+   * @param field field to create a filter on
+   * @param value field value to be filtered
+   * @param relationshipDirection {@link RelationshipDirection} relationship direction
+   * @return RelationshipFilter
+   */
+  @Nonnull
+  public static RelationshipFilter createRelationshipFilter(@Nonnull String field, @Nonnull String value,
+      @Nonnull RelationshipDirection relationshipDirection) {
+    return createRelationshipFilter(createFilter(field, value), relationshipDirection);
+  }
+
+  /**
+   * Create {@link Filter} using field and value
+   *
+   * @param field field to create a filter on
+   * @param value field value to be filtered
+   * @return Filter
+   */
+  @Nonnull
+  public static Filter createFilter(@Nonnull String field, @Nonnull String value) {
+    return new Filter().setCriteria(new CriterionArray(
+        Collections.singletonList(new Criterion().setField(field).setValue(value).setCondition(Condition.EQUAL))));
   }
 }

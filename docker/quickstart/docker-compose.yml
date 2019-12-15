@@ -52,7 +52,7 @@ services:
       - broker
       - schema-registry
     command: "bash -c 'echo Waiting for Kafka to be ready... && \
-                       cub kafka-ready -b broker:29092 1 20 && \
+                       cub kafka-ready -b broker:29092 1 60 && \
                        kafka-topics --create --if-not-exists --zookeeper zookeeper:2181 --partitions 1 --replication-factor 1 --topic MetadataAuditEvent && \
                        kafka-topics --create --if-not-exists --zookeeper zookeeper:2181 --partitions 1 --replication-factor 1 --topic MetadataChangeEvent'"
     environment:
@@ -99,6 +99,7 @@ services:
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
 
   kibana:
     image: docker.elastic.co/kibana/kibana:5.6.8
@@ -108,6 +109,16 @@ services:
       - "5601:5601"
     depends_on:
       - elasticsearch
+
+  neo4j:
+    image: neo4j:3.5.7
+    hostname: neo4j
+    container_name: neo4j
+    environment:
+      NEO4J_AUTH: 'neo4j/datahub'
+    ports:
+      - "7474:7474"
+      - "7687:7687"
 
   # This "container" is a workaround to pre-create search indices
   elasticsearch-setup:
@@ -137,11 +148,18 @@ services:
       - KAFKA_SCHEMAREGISTRY_URL=http://schema-registry:8081
       - ELASTICSEARCH_HOST=elasticsearch
       - ELASTICSEARCH_PORT=9200
+      - NEO4J_URI=bolt://neo4j
+      - NEO4J_USERNAME=neo4j
+      - NEO4J_PASSWORD=datahub
     depends_on:
       - elasticsearch
       - broker
       - mysql
       - schema-registry
+      - neo4j
+    command: "bash -c 'dockerize -wait tcp://mysql:3306 -wait tcp://broker:29092 -wait http://elasticsearch:9200 \
+                                   -timeout 240s \
+                                   java -jar jetty-runner-9.4.20.v20190813.jar gms.war'"
 
   datahub-frontend:
     image: keremsahin/datahub-frontend:latest
@@ -167,11 +185,15 @@ services:
       - KAFKA_SCHEMAREGISTRY_URL=http://schema-registry:8081
       - ELASTICSEARCH_HOST=elasticsearch
       - ELASTICSEARCH_PORT=9200
+      - NEO4J_URI=bolt://neo4j
+      - NEO4J_USERNAME=neo4j
+      - NEO4J_PASSWORD=datahub
     depends_on:
       - kafka-setup
       - elasticsearch
+      - neo4j
     command: "bash -c 'while ping -c1 kafka-setup &>/dev/null; do echo waiting for kafka-setup... && sleep 1; done; \
-              echo kafka-setup done! && ./elasticsearch-index-job/bin/elasticsearch-index-job'"
+              echo kafka-setup done! && ./mae-consumer-job/bin/mae-consumer-job'"
 
   datahub-mce-consumer:
     image: keremsahin/datahub-mce-consumer:latest

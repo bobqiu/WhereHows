@@ -118,9 +118,14 @@ public abstract class BaseEntityResource<
   @Nonnull
   public Task<VALUE> get(@Nonnull ComplexResourceKey<KEY, EmptyRecord> id,
       @QueryParam(PARAM_ASPECTS) @Optional("[]") @Nonnull String[] aspectNames) {
+
     return RestliUtils.toTask(() -> {
       final URN urn = toUrn(id.getKey());
-      return getInternal(Collections.singleton(urn), parseAspectsParam(aspectNames)).get(urn);
+      final VALUE value = getInternalNonEmpty(Collections.singleton(urn), parseAspectsParam(aspectNames)).get(urn);
+      if (value == null) {
+        throw RestliUtils.resourceNotFoundException();
+      }
+      return value;
     });
   }
 
@@ -210,8 +215,35 @@ public abstract class BaseEntityResource<
     return Arrays.asList(aspectNames).stream().map(ModelUtils::getAspectClass).collect(Collectors.toSet());
   }
 
+  /**
+   * Returns a map of {@link VALUE} models given the collection of {@link URN}s and set of aspect classes
+   *
+   * @param urns collection of urns
+   * @param aspectClasses set of aspect classes
+   * @return All {@link VALUE} objects keyed by {@link URN} obtained from DB
+   */
   @Nonnull
   protected Map<URN, VALUE> getInternal(@Nonnull Collection<URN> urns,
+      @Nonnull Set<Class<? extends RecordTemplate>> aspectClasses) {
+    return getUrnAspectMap(urns, aspectClasses).entrySet()
+        .stream()
+        .collect(Collectors.toMap(Map.Entry::getKey, e -> toValue(newSnapshot(e.getKey(), e.getValue()))));
+  }
+
+  /**
+   * Similar to {@link #getInternal(Collection, Set)} but filter out {@link URN}s which are not in the DB.
+   */
+  @Nonnull
+  protected Map<URN, VALUE> getInternalNonEmpty(@Nonnull Collection<URN> urns,
+      @Nonnull Set<Class<? extends RecordTemplate>> aspectClasses) {
+    return getUrnAspectMap(urns, aspectClasses).entrySet()
+        .stream()
+        .filter(e -> !e.getValue().isEmpty())
+        .collect(Collectors.toMap(Map.Entry::getKey, e -> toValue(newSnapshot(e.getKey(), e.getValue()))));
+  }
+
+  @Nonnull
+  private Map<URN, List<UnionTemplate>> getUrnAspectMap(@Nonnull Collection<URN> urns,
       @Nonnull Set<Class<? extends RecordTemplate>> aspectClasses) {
     // Construct the keys to retrieve latest version of all supported aspects for all URNs.
     final Set<AspectKey<URN, ? extends RecordTemplate>> keys = urns.stream()
@@ -228,9 +260,7 @@ public abstract class BaseEntityResource<
         .forEach((key, aspect) -> aspect.ifPresent(
             metadata -> urnAspectsMap.get(key.getUrn()).add(ModelUtils.newAspectUnion(_aspectUnionClass, metadata))));
 
-    return urnAspectsMap.entrySet()
-        .stream()
-        .collect(Collectors.toMap(Map.Entry::getKey, e -> toValue(newSnapshot(e.getKey(), e.getValue()))));
+    return urnAspectsMap;
   }
 
   @Nonnull
